@@ -42,4 +42,3 @@ def run_epoch(model, batches, criterion, device, optimizer=None, max_batches=Non
     return {"loss": total_loss / loss_denominator, "accuracy": accuracy_score(targets, predictions) * 100,
             "macro_f1": f1_score(targets, predictions, labels=list(range(model._num_classes)) if hasattr(model, "_num_classes") else None,
                      average="macro", zero_division=0)}
-
