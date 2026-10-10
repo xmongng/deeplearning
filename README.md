@@ -16,7 +16,7 @@ Audit tự động đã đọc được đủ 4.752 ảnh, không có ảnh hỏ
 
 ## 1. Chuẩn bị Kaggle
 
-Thêm Dataset `watse_set` vào notebook bằng **Add Input**. Cấu trúc đang dùng:
+Dataset của bạn đã nằm trong **Input** của notebook. Dùng trực tiếp cấu trúc này:
 
 ```text
 /kaggle/input/watse_set/realwaste-main/RealWaste/
@@ -33,8 +33,6 @@ Thêm Dataset `watse_set` vào notebook bằng **Add Input**. Cấu trúc đang 
 
 `configs/kaggle.yaml` đã đặt `data.archive: null` và `data.root` trỏ thẳng tới `RealWaste`. Không cần nén hoặc chép ảnh sang `/kaggle/working`. Nếu slug thực tế khác `watse_set`, sửa `data.root` cho đúng thư mục chứa 9 lớp.
 
-Source trên GitHub đã hỗ trợ cấu trúc thư mục này. Có thể clone theo mục 2, hoặc nén source thành ZIP và upload thành Kaggle Dataset thứ hai. Không đưa `.git`, `.venv`, `data/raw`, checkpoint hoặc kết quả cũ vào ZIP. Giữ các file audit và `data/splits`.
-
 Tạo Kaggle Notebook, chọn:
 
 - Accelerator: GPU (T4 x2, P100 hoặc GPU khả dụng).
@@ -47,22 +45,9 @@ Kiểm tra GPU trong một cell:
 !nvidia-smi
 ```
 
-## 2. Đưa source vào `/kaggle/working`
+## 2. Clone hoặc cập nhật code từ GitHub
 
-Nếu upload source dưới dạng Kaggle Dataset ZIP, xem tên file bằng:
-
-```bash
-!find /kaggle/input -maxdepth 3 -type f | sort | head -100
-```
-
-Sau đó giải nén, ví dụ:
-
-```bash
-!unzip -q /kaggle/input/waste-edge-project/waste-edge-quantization.zip -d /kaggle/working
-%cd /kaggle/working/waste-edge-quantization
-```
-
-Nếu dùng GitHub, chạy:
+Chạy cell sau khi thư mục source chưa tồn tại:
 
 ```bash
 %cd /kaggle/working
@@ -70,7 +55,16 @@ Nếu dùng GitHub, chạy:
 %cd /kaggle/working/waste-edge-quantization
 ```
 
-## 3. Cài môi trường đã khóa
+Nếu đã clone từ lần trước, dùng cell này thay cho clone:
+
+```bash
+%cd /kaggle/working/waste-edge-quantization
+!git pull --ff-only origin main
+```
+
+`/kaggle/input` chứa ảnh đã có của bạn. `/kaggle/working/waste-edge-quantization` chứa code, checkpoint và kết quả được tạo khi chạy.
+
+## 3. Cài và kiểm tra môi trường
 
 Chạy cell sau, rồi **Restart Session** nếu Kaggle yêu cầu do thay phiên bản PyTorch:
 
@@ -85,20 +79,34 @@ Sau khi restart, `%cd` lại thư mục dự án và kiểm tra:
 !python -c "import torch,torchvision,torchao,executorch; print(torch.__version__, torchvision.__version__, torchao.__version__); print('CUDA:', torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else None)"
 ```
 
-Không tiếp tục nếu `CUDA: False`.
+Không tiếp tục nếu cài thư viện thất bại, import lỗi hoặc `CUDA: False`. Các phiên bản được pin trong `requirements-kaggle.txt`; phiên Kaggle thực tế chưa được kiểm chứng trong lần sửa này. Nếu pip báo không tìm thấy phiên bản hoặc xung đột, lưu nguyên lỗi để sửa môi trường trước khi train.
+
+Kiểm tra dependency sau khi cài:
+
+```bash
+!python -m pip check
+```
 
 ## 4. Kiểm tra dữ liệu trước khi train
 
-Chạy cell Python để kiểm tra đường dẫn và tên lớp:
+Chạy cell Python để kiểm tra đường dẫn và tên lớp. Nếu tên hiển thị trong Input khác đường dẫn mount thực tế, cell sẽ tìm duy nhất thư mục `RealWaste` chứa đủ 9 lớp và cập nhật `data.root`:
 
 ```python
 from pathlib import Path
 import yaml
 
-cfg = yaml.safe_load(Path("configs/kaggle.yaml").read_text())
+config_path = Path("configs/kaggle.yaml")
+cfg = yaml.safe_load(config_path.read_text())
 root = Path(cfg["data"]["root"])
+if not all((root / name).is_dir() for name in cfg["classes"]):
+    candidates = [p for p in Path("/kaggle/input").rglob("RealWaste")
+                  if p.is_dir() and all((p / name).is_dir() for name in cfg["classes"])]
+    assert len(candidates) == 1, f"Cần chọn đúng data.root; tìm thấy: {candidates}"
+    root = candidates[0]
+    cfg["data"]["root"] = str(root)
+    cfg["data"]["archive"] = None
+    config_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
 print("Dataset:", root)
-assert root.is_dir(), "Sai data.root: kiểm tra đường dẫn trong panel Input"
 for name in cfg["classes"]:
     assert (root / name).is_dir(), f"Thiếu thư mục lớp: {name}"
     print(name, len([p for p in (root / name).rglob("*")
@@ -191,19 +199,16 @@ Không chạy đồng thời hai model trong cùng GPU. Script chạy tuần t�
 
 ## 7. Khôi phục khi phiên bị ngắt
 
-Nếu phiên Kaggle dừng giữa chừng, tải checkpoint đã có lên lại `/kaggle/working/waste-edge-quantization/checkpoints` rồi chạy riêng model còn thiếu. Ví dụ MobileNetV2:
+Nếu phiên Kaggle dừng giữa chừng, giữ hoặc khôi phục đủ thư mục `checkpoints`, `exported`, `results` của cùng lần chạy. Cài môi trường, kiểm tra đường dẫn Input và chạy lại bước xác minh dữ liệu ở mục 4.
 
-```bash
-!python -m src.verify_data --config configs/kaggle.yaml
-!python -u -m src.train_fp32 --config configs/kaggle.yaml --model mobilenet_v2 --device cuda
-!python -u -m src.export_edge --config configs/kaggle.yaml --model mobilenet_v2
-!python -u -m src.ptq_int8 --config configs/kaggle.yaml --model mobilenet_v2
-!python -u -m src.qat_int8 --config configs/kaggle.yaml --model mobilenet_v2 --device cuda
-```
+Chỉ chạy bước chưa hoàn tất trong mục 5:
 
-Thay `mobilenet_v2` bằng `mobilenet_v3_large` hoặc `shufflenet_v2_x1_0`.
+- FP32 có `training_summary.json` và `fp32_best.pth`: bỏ qua train FP32, chuyển tới export nếu chưa có artifact FP32.
+- FP32 có checkpoint nhưng thiếu `training_summary.json`: training đã bị ngắt. Code hiện chưa hỗ trợ resume optimizer; dùng một bản project/output mới để train lại kiến trúc đó.
+- Artifact `.pte` và metadata `.json` tương ứng đã đủ: bỏ qua bước export/PTQ đó.
+- Artifact chỉ ghi được một phần: lưu riêng output của lần lỗi trước khi chạy lại trong một bản project/output mới.
 
-Các script cố ý từ chối ghi đè checkpoint/artifact đã tồn tại. Điều này tránh trộn kết quả từ hai lần chạy. Muốn làm thí nghiệm mới, dùng một bản sao project/output mới thay vì xóa lẻ từng file.
+Không chạy lại cả chuỗi train từ đầu trên checkpoint đã tồn tại: script sẽ từ chối ghi đè. Không trộn checkpoint, config hoặc manifest của các lần thí nghiệm khác nhau.
 
 Nếu QAT đã train xong và có `qat_summary.json` nhưng export bị ngắt:
 
@@ -230,7 +235,16 @@ File ZIP gồm checkpoint, 9 model `.pte`, metadata operator/delegation, metric 
 
 ## 9. Benchmark đúng trên MacBook Air M3
 
-Không dùng latency Kaggle để trả lời hiệu suất trên M3. Sau khi tải ZIP về, chép các thư mục `checkpoints`, `exported`, `results`, `data`, `configs` vào đúng project này. Kích hoạt môi trường local và chạy:
+Không dùng latency Kaggle để trả lời hiệu suất trên M3. Sau khi tải ZIP về, chép các thư mục `checkpoints`, `exported`, `results`, `data`, `configs` vào đúng project này. Nếu chưa có môi trường local, tạo và cài trước:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements-lock.txt
+python -m pip check
+```
+
+Sau đó chạy (benchmark dùng tensor mẫu, không cần chép ảnh Input về Mac):
 
 ```bash
 source .venv/bin/activate
@@ -273,5 +287,7 @@ tests/                   kiểm tra leakage, preprocessing, runtime
 ```bash
 python -m pytest -q
 ```
+
+Bộ test đầy đủ cần dữ liệu local tại `data/raw` cho kiểm tra preprocessing; các kiểm tra smoke được bỏ qua nếu chưa có artifact CP0. Chỉ kiểm tra phần xác minh và giao thức dữ liệu bằng `python -m pytest -q tests/test_verify_data.py tests/test_data_protocol.py`.
 
 Các kiểm tra xác nhận split không giao nhau, calibration chỉ thuộc train, preprocessing validation xác định, số thread ExecuTorch đúng, và 9 artifact smoke có output hữu hạn đúng 9 lớp.
