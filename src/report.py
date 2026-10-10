@@ -89,9 +89,26 @@ def main():
             "## Limitations", "", "Single seed, one principal device, class imbalance, finite test sample, pHash detection limits,",
             "manual label review status (see split summary), operator fallback, process-memory overhead,",
             "and extra QAT epochs confounding accuracy recovery. Do not claim causal explanations without controls."]
+    text += ["", "## Training and stage evidence", "",
+             "Epoch training metrics use augmentation/training mode; validation uses deterministic evaluation.",
+             "QAT validation is measured after INT8 conversion on CPU. PTQ has calibration logs, not training epochs.",
+             "Use curves and deterministic best-FP32 train/validation metrics to discuss overfitting; do not infer it from one epoch.",
+             "Full commands, configs, environment, source/output hashes and failures: `results/evidence/`.", ""]
+    for name in cfg["models"]:
+        for phase in ("fp32", "qat"):
+            history = ROOT / "results/training" / name / phase
+            if (history / "epochs.csv").exists():
+                text += [f"### {name} / {phase.upper()}", "",
+                         f"[Epoch metrics](../results/training/{name}/{phase}/epochs.csv)",
+                         f"[Run config](../results/training/{name}/{phase}/run_config.json)",
+                         f"![Training curves](../results/training/{name}/{phase}/training_curves.png)", ""]
+        if (ROOT / "results/baseline_validation" / name / "metrics.json").exists():
+            text += [f"[Best FP32 deterministic train/validation metrics: {name}](../results/baseline_validation/{name}/metrics.json)", ""]
+    (ROOT / "docs").mkdir(exist_ok=True)
     (ROOT / "docs/REPORT.md").write_text("\n".join(text) + "\n")
     print("Created docs/REPORT.md, results/summary.csv and figures")
 
 
 if __name__ == "__main__":
-    main()
+    from .stage_runner import logged_main
+    logged_main("report", main)

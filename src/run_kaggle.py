@@ -1,6 +1,5 @@
 """Train all 9 configurations on Kaggle and package reproducible artifacts."""
 import argparse
-import shutil
 import subprocess
 import sys
 
@@ -10,7 +9,7 @@ from .common import ROOT, config, environment, write_json
 
 
 def run(module, config_path, *args):
-    cmd = [sys.executable, "-u", "-m", f"src.{module}", "--config", config_path, *args]
+    cmd = [sys.executable, "-u", "-m", "src.stage_runner", module, "--config", config_path, *args]
     print("\n$", " ".join(cmd), flush=True)
     subprocess.run(cmd, cwd=ROOT, check=True)
 
@@ -32,19 +31,9 @@ def main():
         run("ptq_int8", args.config, "--model", name)
         run("qat_int8", args.config, "--model", name, "--device", "cuda")
     run("evaluate", args.config)
-    # Package checkpoints, deploy artifacts, metrics and frozen protocol.
-    package = ROOT / "kaggle-output"
-    package.mkdir(exist_ok=True)
-    for name in ("checkpoints", "exported", "results", "data", "configs", "environment-kaggle.json"):
-        source = ROOT / name
-        target = package / name
-        if source.is_dir():
-            shutil.copytree(source, target, dirs_exist_ok=True, ignore=shutil.ignore_patterns("raw"))
-        elif source.exists():
-            shutil.copy2(source, target)
-    shutil.make_archive("/kaggle/working/waste-edge-complete", "zip", package)
-    print("Created /kaggle/working/waste-edge-complete.zip")
+    print("All stages completed; stage_runner will package the finalized evidence.", flush=True)
 
 
 if __name__ == "__main__":
-    main()
+    from .stage_runner import logged_main
+    logged_main("run_kaggle", main)

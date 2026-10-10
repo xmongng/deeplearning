@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import collections
 import json
+import time
 
 import torch
 from executorch.backends.xnnpack.partition.xnnpack_partitioner import XnnpackPartitioner
@@ -11,7 +12,7 @@ from executorch.exir import to_edge_transform_and_lower
 from executorch.runtime import Runtime
 
 from .common import (ROOT, artifact_dir, checkpoint_path, check_checkpoint, config,
-                     sha256, write_json)
+                     sha256, write_json, environment)
 from .models import NAMES, build_model
 from .quantization import example
 
@@ -25,6 +26,7 @@ def load_runtime(path):
 
 
 def export_model(model, cfg, name, method, metadata, smoke=False):
+    started = time.perf_counter()
     model = model.cpu()
     out = artifact_dir(name, smoke)
     out.mkdir(parents=True, exist_ok=True)
@@ -81,7 +83,8 @@ def export_model(model, cfg, name, method, metadata, smoke=False):
               "graph_operators": dict(ops), "quantization_operators": qops,
               "delegates": delegates, "remaining_edge_operators": dict(residual),
               "parity_max_abs_error": max(parity_errors), "parity_samples": len(parity_errors),
-              "parity_argmax_agreement": sum(parity_matches) / len(parity_matches)}
+              "parity_argmax_agreement": sum(parity_matches) / len(parity_matches),
+              "export_seconds": time.perf_counter() - started, "config": cfg, "environment": environment()}
     write_json(out / f"{method}.json", report)
     (out / f"{method}_edge_graph.txt").write_text(str(edge_module))
     print(f"Exported {path}: {report['serialized_size_mb']:.2f} MB, {len(delegates)} delegates", flush=True)
@@ -112,4 +115,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    from .stage_runner import logged_main
+    logged_main("export_edge", main)

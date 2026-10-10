@@ -39,4 +39,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    from .stage_runner import logged_main
+    logged_main("verify_data", main)

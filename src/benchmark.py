@@ -149,4 +149,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    from .stage_runner import logged_main
+    # Worker stdout/stderr already has a dedicated raw log and JSON in the parent.
+    if "--worker" in sys.argv:
+        main()
+    else:
+        logged_main("benchmark", main)

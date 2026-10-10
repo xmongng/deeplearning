@@ -26,7 +26,7 @@ def main():
     log_dir.mkdir(parents=True, exist_ok=True)
 
     def run(module, *extra):
-        cmd = [sys.executable, "-u", "-m", f"src.{module}", *extra]
+        cmd = [sys.executable, "-u", "-m", "src.stage_runner", module, *extra]
         if args.config:
             cmd += ["--config", str(Path(args.config).resolve())]
         print("Running:", " ".join(cmd), flush=True)
@@ -55,4 +55,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    from .stage_runner import logged_main
+    logged_main("run_pipeline", main)

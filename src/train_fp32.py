@@ -4,40 +4,13 @@ import argparse
 import time
 
 import torch
-from sklearn.metrics import accuracy_score, f1_score
 
 from .common import (ROOT, config, device_for, environment,
-                     seed_all, split_fingerprint, write_csv, write_json)
+                     seed_all, split_fingerprint, write_csv, write_json, sha256, rng_state)
 from .data import loader, loss_function
 from .models import NAMES, build_model
-
-
-def run_epoch(model, batches, criterion, device, optimizer=None, max_batches=None):
-    predictions, targets = [], []
-    total_loss, total = 0.0, 0
-    with torch.set_grad_enabled(optimizer is not None):
-        for i, (x, y, _) in enumerate(batches):
-            if max_batches is not None and i >= max_batches:
-                break
-            x, y = x.to(device), y.to(device)
-            if optimizer is not None:
-                optimizer.zero_grad(set_to_none=True)
-            logits = model(x)
-            loss = criterion(logits, y)
-            if not torch.isfinite(loss):
-                raise RuntimeError("Non-finite loss")
-            if optimizer is not None:
-                loss.backward()
-                optimizer.step()
-            total_loss += loss.item() * len(y)
-            total += len(y)
-            predictions.extend(logits.detach().argmax(1).cpu().tolist())
-            targets.extend(y.cpu().tolist())
-    if not total:
-        raise ValueError("Empty epoch")
-    return {"loss": total_loss / total, "accuracy": accuracy_score(targets, predictions) * 100,
-            "macro_f1": f1_score(targets, predictions, labels=list(range(model._num_classes)) if hasattr(model, "_num_classes") else None,
-                     average="macro", zero_division=0)}
+from .training_metrics import run_epoch
+from .training_history import print_epoch, save_history, plot_history
 
 
 def train(cfg, name, epochs=None, device=None, smoke=False):
@@ -56,7 +29,18 @@ def train(cfg, name, epochs=None, device=None, smoke=False):
     out.mkdir(parents=True, exist_ok=True)
     if (out / "fp32_best.pth").exists():
         raise RuntimeError(f"Checkpoint already exists at {out}; refusing to overwrite an experiment")
-    log, best, stale = [], -1.0, 0
+    evidence = ROOT / ("results/smoke/training" if smoke else "results/training") / name / "fp32"
+    write_json(evidence / "run_config.json", {"config": cfg, "effective_epochs": count,
+               "device": str(device), "optimizer": "AdamW", "optimizer_settings": optimizer.defaults,
+               "scheduler": "CosineAnnealingLR", "scheduler_initial_state": scheduler.state_dict(),
+               "training_strategy": "full_fine_tuning", "pretrained": not smoke,
+               "parameters": sum(p.numel() for p in model.parameters()),
+               "trainable_parameters": sum(p.numel() for p in model.parameters() if p.requires_grad),
+               "class_weights": criterion.weight.detach().cpu().tolist() if criterion.weight is not None else None,
+               "split_fingerprint": split_fingerprint(), "environment": environment(),
+               "metric_notes": "Train uses augmentation and training mode; val uses deterministic preprocessing and eval mode. Loss is weighted CE aggregated by target weight."})
+    (evidence / "architecture.txt").write_text(str(model) + "\n")
+    log, best, stale, best_epoch = [], -1.0, 0, None
     started = time.perf_counter()
     for epoch in range(count):
         epoch_start = time.perf_counter()
@@ -69,25 +53,37 @@ def train(cfg, name, epochs=None, device=None, smoke=False):
                **{f"train_{k}": v for k, v in train_scores.items()},
                **{f"val_{k}": v for k, v in val_scores.items()}}
         log.append(row)
-        print(f"{name} epoch {epoch+1}/{count}: val acc={val_scores['accuracy']:.2f}% F1={val_scores['macro_f1']:.4f}", flush=True)
+        save_history(evidence, log)
+        print_epoch(name, "fp32", row, count)
         state = {"model": name, "state_dict": {k: v.detach().cpu() for k, v in model.state_dict().items()},
                  "classes": cfg["classes"], "preprocessing": cfg["preprocessing"],
                  "split_fingerprint": split_fingerprint(), "epoch": epoch + 1,
                  "validation": val_scores, "config": cfg, "smoke_only": smoke}
         if val_scores["macro_f1"] > best:
-            best, stale = val_scores["macro_f1"], 0
+            best, stale, best_epoch = val_scores["macro_f1"], 0, epoch + 1
             torch.save(state, out / "fp32_best.pth")
         else:
             stale += 1
         scheduler.step()
-        torch.save({**state, "optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict()}, out / "fp32_last.pth")
+        torch.save({**state, "optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict(), "rng_state": rng_state(),
+                    "loader_generator_state": train_loader.generator.get_state() if hasattr(train_loader, "generator") and train_loader.generator is not None else None}, out / "fp32_last.pth")
         write_csv(out / "history.csv", log)
         if stale >= t["patience"]:
             break
-    write_json(out / "training_summary.json", {"model": name, "device": str(device),
+    summary = {"model": name, "device": str(device),
                "parameters": sum(p.numel() for p in model.parameters()),
                "total_seconds": time.perf_counter() - started, "best_val_macro_f1": best,
-               "environment": environment(), "config": cfg, "smoke_only": smoke})
+               "environment": environment(), "config": cfg, "smoke_only": smoke,
+               "best_epoch": best_epoch, "completed_epochs": len(log), "requested_epochs": count,
+               "stop_reason": "early_stopping" if stale >= t["patience"] else "max_epochs",
+               "split_fingerprint": split_fingerprint(), "best_checkpoint": str(out / "fp32_best.pth"),
+               "best_checkpoint_sha256": sha256(out / "fp32_best.pth")}
+    write_json(out / "training_summary.json", summary)
+    write_json(evidence / "summary.json", summary)
+    plot_history(evidence)
+    if not smoke:
+        from .evaluate_checkpoint import evaluate_checkpoint
+        evaluate_checkpoint(cfg, name)
 
 
 def main():
@@ -102,4 +98,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    from .stage_runner import logged_main
+    logged_main("train_fp32", main)

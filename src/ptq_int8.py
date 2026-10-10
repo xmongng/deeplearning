@@ -3,7 +3,7 @@ import time
 
 import torch
 
-from .common import ROOT, config, seed_all, read_csv
+from .common import ROOT, config, seed_all, read_csv, write_csv, write_json, environment
 from .data import loader
 from .export_edge import export_model, load_fp32
 from .models import NAMES
@@ -21,14 +21,31 @@ def main():
     model, meta = load_fp32(cfg, args.model)
     started = time.perf_counter()
     prepared = prepare(model, cfg)
+    calibration_log = []
+    evidence = ROOT / "results/quantization" / args.model / "ptq"
+    write_json(evidence / "run_config.json", {"config": cfg, "environment": environment(), **meta,
+               "scheme": "static W8A8; symmetric per-channel weights; XNNPACK PT2E",
+               "calibration_split": "calibration (train-only)", "device": "cpu"})
     with torch.no_grad():
-        for x, _, _ in loader(cfg, "calibration"):
+        for index, (x, y, paths) in enumerate(loader(cfg, "calibration")):
+            batch_start = time.perf_counter()
             prepared(x)
+            calibration_log.append({"index": index + 1, "path": paths[0], "label": y.item(),
+                                    "seconds": time.perf_counter() - batch_start})
+            write_csv(evidence / "calibration.csv", calibration_log)
+            if (index + 1) % 25 == 0:
+                print(f"{args.model} PTQ calibrated {index + 1} images", flush=True)
+    (evidence / "prepared_graph.txt").write_text(str(prepared) + "\n")
+    observer_state = {key: value.detach().cpu() for key, value in prepared.state_dict().items()
+                      if "activation_post_process" in key or "observer" in key}
+    torch.save(observer_state, evidence / "observer_state.pth")
     model = convert(prepared)
     meta.update(calibration_paths=[r["path"] for r in read_csv(ROOT / "data/splits/calibration.csv")],
                 ptq_seconds=time.perf_counter() - started)
-    export_model(model, cfg, args.model, "ptq", meta)
+    report = export_model(model, cfg, args.model, "ptq", meta)
+    write_json(evidence / "summary.json", {**report, "calibration_images": len(calibration_log)})
 
 
 if __name__ == "__main__":
-    main()
+    from .stage_runner import logged_main
+    logged_main("ptq_int8", main)

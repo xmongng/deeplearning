@@ -4,12 +4,14 @@ import time
 import torch
 from torchao.quantization.pt2e import disable_observer
 
-from .common import ROOT, config, device_for, seed_all, write_csv, write_json
+from .common import (ROOT, config, device_for, seed_all, write_csv, write_json,
+                     environment, split_fingerprint, sha256, rng_state)
 from .data import loader, loss_function
 from .export_edge import export_model, load_fp32
 from .models import NAMES
 from .quantization import convert, freeze_bn, prepare
-from .train_fp32 import run_epoch
+from .training_metrics import run_epoch
+from .training_history import print_epoch, save_history, plot_history
 
 
 def train_qat(cfg, name, epochs=None, export_only=False, device=None):
@@ -37,9 +39,20 @@ def train_qat(cfg, name, epochs=None, export_only=False, device=None):
     criterion = loss_function(cfg, device)
     optimizer = torch.optim.AdamW(prepared.parameters(), lr=q["learning_rate"],
                                  weight_decay=cfg["train"]["weight_decay"])
+    count = epochs or q["epochs"]
+    evidence = ROOT / "results/training" / name / "qat"
+    write_json(evidence / "run_config.json", {"config": cfg, "effective_epochs": count,
+               "device": str(device), "optimizer": "AdamW", "optimizer_settings": optimizer.defaults, "scheduler": None,
+               "class_weights": criterion.weight.detach().cpu().tolist() if criterion.weight is not None else None,
+               "environment": environment(), "split_fingerprint": split_fingerprint(), **meta,
+               "parameters": sum(p.numel() for p in prepared.parameters()),
+               "trainable_parameters": sum(p.numel() for p in prepared.parameters() if p.requires_grad),
+               "metric_notes": "Train uses fake quantization and augmentation; validation uses converted INT8 on CPU. Observer/BN freeze epochs below are one-based."})
+    (evidence / "prepared_graph.txt").write_text(str(prepared) + "\n")
     best, log = -1.0, []
     start = time.perf_counter()
-    for epoch in range(epochs or q["epochs"]):
+    for epoch in range(count):
+        epoch_start = time.perf_counter()
         if epoch >= q["freeze_observer_epoch"]:
             prepared.apply(disable_observer)
         if epoch >= q["freeze_bn_epoch"]:
@@ -52,20 +65,35 @@ def train_qat(cfg, name, epochs=None, export_only=False, device=None):
         candidate = convert(prepared).cpu()
         candidate._num_classes = len(cfg["classes"])
         val_scores = run_epoch(candidate, validation, loss_function(cfg, "cpu"), "cpu")
-        log.append({"epoch": epoch + 1, **{f"train_{k}": v for k, v in train_scores.items()},
-                    **{f"val_int8_{k}": v for k, v in val_scores.items()}, "elapsed_seconds": time.perf_counter() - start})
-        print(f"{name} QAT epoch {epoch+1}: converted val F1={val_scores['macro_f1']:.4f}", flush=True)
+        row = {"epoch": epoch + 1, "learning_rate": optimizer.param_groups[0]["lr"],
+                    "seconds": time.perf_counter() - epoch_start,
+                    "observer_frozen": epoch >= q["freeze_observer_epoch"],
+                    "batchnorm_frozen": epoch >= q["freeze_bn_epoch"], **{f"train_{k}": v for k, v in train_scores.items()},
+                    **{f"val_int8_{k}": v for k, v in val_scores.items()}, "elapsed_seconds": time.perf_counter() - start}
+        log.append(row)
+        save_history(evidence, log)
+        print_epoch(name, "qat", row, count)
         if val_scores["macro_f1"] > best:
             best = val_scores["macro_f1"]
             torch.save({"state_dict": prepared.state_dict(), "epoch": epoch + 1,
                         "validation_int8": val_scores, "config": cfg, **meta}, out / "qat_best.pth")
+        torch.save({"state_dict": prepared.state_dict(), "epoch": epoch + 1,
+                    "optimizer": optimizer.state_dict(), "config": cfg, "rng_state": rng_state(),
+                    "loader_generator_state": batches.generator.get_state() if hasattr(batches, "generator") and batches.generator is not None else None,
+                    "validation_int8": val_scores, **meta}, out / "qat_last.pth")
         write_csv(out / "qat_history.csv", log)
     elapsed = time.perf_counter() - start
     best_ckpt = torch.load(out / "qat_best.pth", weights_only=True, map_location="cpu")
     prepared.load_state_dict(best_ckpt["state_dict"])
     meta.update(qat_extra_seconds=elapsed, qat_best_epoch=best_ckpt["epoch"],
-                qat_validation_int8=best_ckpt["validation_int8"], qat_config=q)
+                qat_validation_int8=best_ckpt["validation_int8"], qat_config=q,
+                completed_epochs=len(log), requested_epochs=count, config=cfg, environment=environment(),
+                device=str(device), best_checkpoint_sha256=sha256(out / "qat_best.pth"),
+                observer_freeze_epoch_one_based=q["freeze_observer_epoch"] + 1,
+                batchnorm_freeze_epoch_one_based=q["freeze_bn_epoch"] + 1)
     write_json(out / "qat_summary.json", meta)
+    write_json(evidence / "summary.json", meta)
+    plot_history(evidence)
     export_model(convert(prepared), cfg, name, "qat", meta)
 
 
@@ -81,4 +109,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    from .stage_runner import logged_main
+    logged_main("qat_int8", main)

@@ -8,6 +8,8 @@ import functools
 import platform
 import random
 import subprocess
+import os
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -39,7 +41,16 @@ def seed_all(seed):
 def write_json(path, obj):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(obj, ensure_ascii=False, indent=2, allow_nan=False) + "\n")
+    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as stream:
+        temporary = Path(stream.name)
+        try:
+            stream.write(json.dumps(obj, ensure_ascii=False, indent=2, allow_nan=False) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+    temporary.replace(path)
 
 
 def read_csv(path):
@@ -50,10 +61,18 @@ def read_csv(path):
 def write_csv(path, rows, fields=None):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fields or list(rows[0]))
-        writer.writeheader()
-        writer.writerows(rows)
+    with tempfile.NamedTemporaryFile(mode="w", newline="", dir=path.parent, delete=False) as stream:
+        temporary = Path(stream.name)
+        try:
+            writer = csv.DictWriter(stream, fieldnames=fields or list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+            stream.flush()
+            os.fsync(stream.fileno())
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+    temporary.replace(path)
 
 
 def sha256(path):
@@ -81,7 +100,13 @@ def environment():
             versions[name] = None
     result = {"platform": platform.platform(), "machine": platform.machine(),
               "python": platform.python_version(), "versions": versions,
-              "mps_available": torch.backends.mps.is_available()}
+              "mps_available": torch.backends.mps.is_available(),
+              "cuda_available": torch.cuda.is_available(), "torch_cuda_build": torch.version.cuda,
+              "cudnn_version": torch.backends.cudnn.version(), "torch_threads": torch.get_num_threads(),
+              "gpus": [{"index": i, "name": torch.cuda.get_device_name(i),
+                        "total_memory_bytes": torch.cuda.get_device_properties(i).total_memory,
+                        "capability": list(torch.cuda.get_device_capability(i))}
+                       for i in range(torch.cuda.device_count())] if torch.cuda.is_available() else []}
     if platform.system() == "Darwin":
         for cmd in (["sw_vers"], ["system_profiler", "SPHardwareDataType"]):
             output = subprocess.check_output(cmd, text=True, timeout=30)
@@ -115,3 +140,13 @@ def check_checkpoint(ckpt, cfg):
         raise ValueError("Dataset splits changed since training; start a new experiment")
     if ckpt["preprocessing"] != cfg["preprocessing"]:
         raise ValueError("Preprocessing changed since training")
+
+
+def rng_state():
+    """Save RNG state in weights_only-compatible types for later reproducibility audits."""
+    numpy_state = np.random.get_state()
+    return {"python": random.getstate(), "numpy": {"generator": numpy_state[0],
+            "keys": numpy_state[1].tolist(), "position": numpy_state[2],
+            "has_gauss": numpy_state[3], "cached_gaussian": numpy_state[4]},
+            "torch_cpu": torch.get_rng_state(),
+            "torch_cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else []}
