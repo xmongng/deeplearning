@@ -33,6 +33,16 @@ class ParityPolicyTests(unittest.TestCase):
         self.assertTrue(row['numerically_close'])
         self.assertEqual(summarize_parity([row], 'ptq', 3)['status'], 'failed')
 
+    def test_runtime_validation_records_drift_without_claiming_equivalence(self):
+        row = self.sample([1., .99, 0.], [.99, 1., 0.])
+        report = summarize_parity([row], 'ptq', 3, policy='runtime_validation')
+        self.assertEqual(report['status'], 'passed')
+        self.assertFalse(report['equivalent_predictions'])
+        self.assertEqual(report['runtime_minus_reference_accuracy_pp'], -100)
+        self.assertTrue(report['warnings'])
+        invalid = self.sample([1., .99, 0.], [float('nan'), 1., 0.])
+        self.assertEqual(summarize_parity([invalid], 'qat', 3, policy='runtime_validation')['status'], 'failed')
+
     def test_fp32_and_smoke_keep_strict_numerical_checks(self):
         for method, smoke in [('fp32', False), ('ptq', True)]:
             row = self.sample([4., 2., 0.], [4., 2.16, 0.], method)

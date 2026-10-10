@@ -14,7 +14,7 @@ from executorch.exir import to_edge_transform_and_lower
 from executorch.runtime import Runtime
 
 from .common import (ROOT, artifact_dir, checkpoint_path, check_checkpoint, config,
-                     sha256, write_json, environment)
+                     sha256, write_json, environment, read_csv)
 from .models import NAMES, build_model
 from .quantization import example
 from .export_validation import compare_outputs, summarize_parity
@@ -104,11 +104,17 @@ def export_model(model, cfg, name, method, metadata, smoke=False):
                     observed = forward.execute((sample,))[0].clone()
                     rows.append(compare_outputs(expected, observed, paths[0], cfg["classes"], method, target.item()))
                     write_json(evidence / "parity_samples.json", rows)
-        parity = summarize_parity(rows, method, len(cfg["classes"]), smoke)
+        expected_samples = len(read_csv(ROOT / 'data/splits/val.csv')) if not smoke and (ROOT / 'data/splits/val.csv').exists() else None
+        if expected_samples is not None and len(rows) - 1 != expected_samples:
+            raise RuntimeError('Incomplete validation coverage')
+        parity = summarize_parity(rows, method, len(cfg["classes"]), smoke,
+                                  cfg.get('export_validation', {}).get('int8_policy', 'exact_validation_predictions'))
         report.update(parity=parity, parity_status=parity["status"],
                       parity_max_abs_error=parity["max_abs_error"], parity_samples=len(rows),
                       parity_argmax_agreement=parity["argmax_agreement"])
         write_json(evidence / "parity_summary.json", parity)
+        for warning in parity['warnings']:
+            print('WARNING: ' + warning, flush=True)
         if parity["status"] != "passed":
             raise RuntimeError(f"Export parity failed: {parity['failure_reasons']}. Diagnostics: {evidence}")
         report.update(export_status="passed", export_seconds=time.perf_counter() - started)

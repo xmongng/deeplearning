@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 ROOT = Path(__file__).resolve().parents[1]
 STAGES = ('verify_data', 'train_fp32', 'evaluate_checkpoint', 'export_edge', 'ptq_int8',
-          'qat_int8', 'evaluate', 'training_history', 'benchmark', 'report', 'smoke_test', 'run_kaggle', 'run_pipeline')
+          'qat_int8', 'ptq_lowbit', 'continue_experiments', 'evaluate', 'training_history', 'benchmark', 'report', 'smoke_test', 'run_kaggle', 'run_pipeline')
 
 
 def digest(path):

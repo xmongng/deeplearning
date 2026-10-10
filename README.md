@@ -195,6 +195,105 @@ Pipeline lần lượt:
 
 Không chạy đồng thời hai model trong cùng GPU. Script chạy tuần tự để giảm nguy cơ hết VRAM và ghi log liên tục.
 
+## Chạy tiếp snapshot đã train và thêm W4A32/W2A32
+
+Không train lại FP32. Với snapshot `waste-edge-after-algorithms-20261010T154207.zip`, MobileNetV2 QAT sẽ resume từ epoch 5 đến tổng 8; MobileNetV3/ShuffleNet dùng best QAT đã lưu để export lại. PTQ được calibrate/export lại từ FP32 best. FP32 artifact đã hoàn chỉnh được giữ nguyên.
+
+Nếu còn thư mục project/output trong phiên hiện tại, bỏ qua bước khôi phục ZIP. Nếu mở phiên mới, clone source mới theo mục 2, gắn dataset RealWaste trong Input và upload ZIP snapshot như một dataset khác. Khôi phục **chỉ outputs và manifests**, không chép source cũ lên code vừa pull:
+
+```python
+from pathlib import Path, PurePosixPath
+import zipfile
+PROJECT = Path('/kaggle/working/waste-edge-quantization')
+SNAPSHOT = Path('/kaggle/input/YOUR-SNAPSHOT-DATASET/waste-edge-after-algorithms-20261010T154207.zip')
+with zipfile.ZipFile(SNAPSHOT) as archive:
+    for info in archive.infolist():
+        path = PurePosixPath(info.filename)
+        if path.is_absolute() or '..' in path.parts:
+            raise ValueError('Unsafe ZIP path')
+        if not path.parts or path.parts[0] not in {'checkpoints', 'exported', 'results', 'data'}:
+            continue
+        if 'raw' in path.parts or info.is_dir():
+            continue
+        destination = PROJECT.joinpath(*path.parts)
+        if destination.exists():
+            # Refuse mixing different outputs from two runs.
+            if destination.read_bytes() != archive.read(info):
+                raise FileExistsError(destination)
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(archive.read(info))
+```
+
+Cập nhật code trong phiên hiện tại và tạo config chạy tiếp giữ nguyên thông số training cũ. Cell này sao lưu config trước khi trả file config tracked về bản Git để pull; bản cấu hình chạy tiếp nằm trong `configs/kaggle_continue.yaml`:
+
+```python
+import subprocess, yaml
+from pathlib import Path
+PROJECT = Path('/kaggle/working/waste-edge-quantization')
+old_cfg = yaml.safe_load((PROJECT / 'configs/kaggle.yaml').read_text())
+backup = Path('/kaggle/working/kaggle-config-before-continue.yaml')
+if not backup.exists():
+    backup.write_text(yaml.safe_dump(old_cfg, sort_keys=False))
+subprocess.run(['git', 'restore', '--', 'configs/kaggle.yaml'], cwd=PROJECT, check=True)
+subprocess.run(['git', 'pull', '--ff-only', 'origin', 'main'], cwd=PROJECT, check=True)
+old_cfg['data']['archive'] = None
+old_cfg['data']['root'] = '/kaggle/input/watse_set/realwaste-main/RealWaste'  # sửa đúng Input thực tế
+old_cfg['export_validation'] = {'int8_policy': 'runtime_validation'}
+(PROJECT / 'configs/kaggle_continue.yaml').write_text(yaml.safe_dump(old_cfg, sort_keys=False))
+```
+
+Nếu khác đường dẫn `/kaggle/input/...` thì chỉ sửa `data.root`; không đổi classes, preprocessing, seed, train hoặc qat khi resume. Nếu snapshot dùng thông số khác config mặc định, lấy các mục đó từ `checkpoints/mobilenet_v2/qat_last.pth` (`torch.load(..., weights_only=True)['config']`) trước khi tạo config chạy tiếp. Resume kiểm tra và từ chối cấu hình training không khớp.
+
+```python
+%cd /kaggle/working/waste-edge-quantization
+!python -u -m src.stage_runner verify_data --config configs/kaggle_continue.yaml
+!python -u -m src.stage_runner continue_experiments --config configs/kaggle_continue.yaml --device cuda --bits 4 2
+```
+
+Lệnh thứ hai chạy tuần tự: export FP32 còn thiếu → PTQ → QAT export-only/resume → test 9 `.pte` → W4A32 và W2A32 cho cả ba model → báo cáo phân loại/dung lượng. Nếu thiếu artifact INT8, test và low-bit bị hoãn. Không train lại FP32, không xóa checkpoint hay evidence cũ. Khi chạy lại, artifact INT8 hoàn chỉnh được bỏ qua; thí nghiệm packed dùng lại weight đã lưu và đánh giá lại.
+
+**W4A32/W2A32 là thí nghiệm weight-only:** mọi trọng số Conv2d/Linear được lượng tử hóa đối xứng theo output channel, pack 4 hoặc 2 bit thật; bias/BatchNorm và activation giữ FP32. INT2 đối xứng dùng các mức -1/0/1. Model được unpack một lần sang FP32 để đánh giá. Đây chưa phải kernel INT4/INT2 tăng tốc hay model `.pte` cho điện thoại. XNNPACK PT2E hiện hỗ trợ INT8 convolution; đường 4-bit được tài liệu mô tả cho linear với activation dynamic INT8 ([tài liệu chính thức](https://docs.pytorch.org/executorch/stable/backends/xnnpack/xnnpack-quantization.html)). Không suy luận tốc độ/RAM từ kích thước packed checkpoint.
+
+Các mức bit được cố định trước khi đánh giá test, không dùng test để chọn scale hoặc tune hyperparameter. Weight-only không cần calibration; scale tính từ trọng số FP32 best.
+
+```text
+exported/<model>/w4a32_packed.pth, w2a32_packed.pth
+exported/<model>/w4a32_packed.json, w2a32_packed.json
+results/lowbit/<model>/w4a32/     tương tự w2a32/
+  val_predictions.csv, test_predictions.csv
+  val_metrics.json, test_metrics.json
+  val_per_class.json, test_per_class.json
+  val_confusion.json/.png/.pdf, test_confusion.json/.png/.pdf
+  metrics.csv, summary.json
+results/classification_storage_comparison.csv
+results/continuations/<UTC>.json
+results/evidence/<model>/ptq_lowbit/<UTC>/
+figures/classification_storage_*.png
+docs/CLASSIFICATION_REPORT.md
+```
+
+Bảng so sánh ghi Accuracy/Macro-F1/loss, độ giảm so FP32 và dung lượng file thật, đồng thời phân biệt `.pte` chạy INT8 với `.pth` packed chạy FP32. Log giữ cấu hình, số layer lượng tử hóa, checksum, môi trường và thời gian stage. Benchmark M3/điện thoại vẫn cần chạy trên thiết bị thật; báo cáo Kaggle không gán latency cho các thiết bị này.
+
+Chỉ đóng gói sau khi lệnh chạy tiếp thành công, để ZIP chứa cả log stage cuối cùng:
+
+```python
+from datetime import datetime, timezone
+output = '/kaggle/working/waste-edge-continued-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S') + '.zip'
+!python -u -m src.package_results --output {output}
+```
+
+Chạy từng bước khi cần chẩn đoán:
+
+```bash
+!python -u -m src.stage_runner qat_int8 --config configs/kaggle_continue.yaml --model mobilenet_v2 --device cuda --resume
+!python -u -m src.stage_runner qat_int8 --config configs/kaggle_continue.yaml --model mobilenet_v3_large --export-only
+!python -u -m src.stage_runner qat_int8 --config configs/kaggle_continue.yaml --model shufflenet_v2_x1_0 --export-only
+!python -u -m src.stage_runner ptq_lowbit --config configs/kaggle_continue.yaml --model mobilenet_v2 --bits 4 --device cuda
+```
+
+`--epochs` là tổng số epoch, không phải số epoch bổ sung. Không dùng đồng thời `--resume` và `--export-only`.
+
 ## 7. Khôi phục khi phiên bị ngắt
 
 Nếu phiên Kaggle dừng giữa chừng, giữ hoặc khôi phục đủ thư mục `checkpoints`, `exported`, `results` của cùng lần chạy. Cài môi trường, kiểm tra đường dẫn Input và chạy lại bước xác minh dữ liệu ở mục 4.
@@ -204,7 +303,7 @@ Chỉ chạy bước chưa hoàn tất trong mục 5:
 - FP32 có `training_summary.json` và `fp32_best.pth`: bỏ qua train FP32, chuyển tới export nếu chưa có artifact FP32.
 - FP32 có checkpoint nhưng thiếu `training_summary.json`: training đã bị ngắt. Code hiện chưa hỗ trợ resume optimizer; dùng một bản project/output mới để train lại kiến trúc đó.
 - Artifact `.pte` và metadata `.json` tương ứng đã đủ: bỏ qua bước export/PTQ đó.
-- Artifact chỉ ghi được một phần: lưu riêng output của lần lỗi trước khi chạy lại trong một bản project/output mới.
+- Artifact chỉ ghi được một phần: code giữ bản dở trong evidence và thử lại; artifact hoàn chỉnh được bảo vệ khỏi ghi đè.
 
 Không chạy lại cả chuỗi train từ đầu trên checkpoint đã tồn tại: script sẽ từ chối ghi đè. Không trộn checkpoint, config hoặc manifest của các lần thí nghiệm khác nhau.
 
@@ -224,9 +323,9 @@ Sau khi đủ 9 file `.pte`:
 
 Với FP32, giữ kiểm tra từng logit với `rtol=0.001`, `atol=0.001`. Smoke test cũng kiểm tra số học nghiêm ngặt.
 
-Với PTQ/QAT INT8, mức `rtol=0.001`, `atol=0.15` được giữ để ghi nhận sai lệch số học, nhưng không còn dừng ngay khi một logit vượt mức này. Trước khi chấp nhận artifact, code so sánh **toàn bộ validation** giữa model đã convert trước export và `.pte` chạy XNNPACK. Mặc định **mọi dự đoán top-1 validation phải trùng nhau**, và output phải đúng shape, hữu hạn. Độ lệch Accuracy/Macro-F1 cùng mọi logit được ghi lại. Test chưa được dùng ở bước này.
+Với PTQ/QAT INT8, mức `rtol=0.001`, `atol=0.15` được giữ để ghi nhận sai lệch số học, nhưng không còn dừng ngay khi một logit vượt mức này. Trước khi chấp nhận artifact, code so sánh **toàn bộ validation** giữa model đã convert trước export và `.pte` chạy XNNPACK. Trong `configs/kaggle.yaml`, policy mới là **runtime_validation**: toàn bộ output validation phải đúng shape, hữu hạn; dự đoán lệch được ghi thành cảnh báo, không chặn việc đo chất lượng model runtime. Policy nghiêm ngặt `exact_validation_predictions` vẫn có thể chọn trong config. Độ lệch Accuracy/Macro-F1 cùng mọi logit được ghi lại. Test chưa được dùng ở bước này.
 
-Vì vậy sai lệch `0.159983 > 0.15` có thể được chấp nhận khi tất cả dự đoán validation vẫn trùng; nếu có dự đoán validation khác nhau, export vẫn thất bại và cần phân tích bằng chứng. Điều này không khẳng định một artifact cụ thể đã đạt khi chưa chạy kiểm tra thật.
+Trạng thái export passed theo runtime_validation chỉ có nghĩa artifact thực thi được qua validation; **không khẳng định tương đương số học hoặc đạt yêu cầu chất lượng**. Sai lệch logit, tỷ lệ đổi nhãn, Accuracy/Macro-F1 trước/sau export vẫn được lưu. Policy đã được sửa sau khi quan sát lỗi validation của lần chạy cũ; cần ghi rõ thay đổi này trong báo cáo. Không sửa status hay xóa evidence của lần thất bại cũ.
 
 Mỗi lần thử lưu vào:
 

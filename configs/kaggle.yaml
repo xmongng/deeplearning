@@ -33,3 +33,7 @@ benchmark:
   warmup: 30
   iterations: 200
   repeats: 3
+export_validation:
+  # Allows measuring the deployed model, without claiming numerical equivalence.
+  # Drift remains visible in per-sample logs, metadata, test metrics and reports.
+  int8_policy: runtime_validation

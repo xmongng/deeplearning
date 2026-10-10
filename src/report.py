@@ -16,9 +16,14 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--config")
     p.add_argument("--threads", type=int, default=1)
+    p.add_argument('--quality-only', action='store_true', help='Report classification/storage without requiring Mac benchmarks')
     args = p.parse_args()
     cfg = config(args.config)
     quality = pd.read_csv(ROOT / "results/quality_metrics.csv")
+    if args.quality_only:
+        from .quality_report import quality_report
+        quality_report(cfg, quality)
+        return
     bench = pd.read_csv(ROOT / "results/mac_m3_benchmark.csv")
     for _, row in quality.iterrows():
         _, meta = verify_artifact(cfg, row["model"], row["method"])

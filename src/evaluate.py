@@ -66,6 +66,9 @@ def evaluate_one(cfg, name, method):
             "test_images": len(rows), "serialized_size_mb": meta["serialized_size_mb"],
             "qat_extra_seconds": meta.get("qat_extra_seconds", ""), "pte_sha256": meta["pte_sha256"],
             "split_fingerprint": meta["split_fingerprint"], "evaluation_seconds": time.perf_counter() - started}
+    summary.update(export_policy=meta.get('parity', {}).get('policy', 'legacy'),
+                   export_prediction_agreement=meta.get('parity', {}).get('validation_argmax_agreement', ''),
+                   numerically_equivalent_predictions=meta.get('parity', {}).get('equivalent_predictions', ''))
     write_json(out / f"{method}_metrics.json", {**summary, "config": cfg, "artifact_metadata": meta})
     return summary
 

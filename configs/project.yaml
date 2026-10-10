@@ -42,3 +42,6 @@ benchmark:
   warmup: 30
   iterations: 200
   repeats: 3
+
+export_validation:
+  int8_policy: runtime_validation

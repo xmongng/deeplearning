@@ -35,7 +35,9 @@ def compare_outputs(expected, observed, sample, classes, method, target=None):
     return row
 
 
-def summarize_parity(rows, method, num_classes, smoke=False):
+def summarize_parity(rows, method, num_classes, smoke=False, policy='exact_validation_predictions'):
+    if policy not in ('exact_validation_predictions', 'runtime_validation'):
+        raise ValueError('Unknown INT8 export policy: ' + policy)
     if not rows:
         raise ValueError('No parity samples')
     validation = [r for r in rows if r['target'] is not None]
@@ -49,17 +51,20 @@ def summarize_parity(rows, method, num_classes, smoke=False):
             reasons.append('Strict numerical parity failed')
     elif not validation:
         reasons.append('INT8 export requires the complete validation set')
-    elif any(not r['argmax_agreement'] for r in validation):
+    elif policy == 'exact_validation_predictions' and any(not r['argmax_agreement'] for r in validation):
         reasons.append('INT8 runtime predictions differ from reference on validation')
     summary = {'status': 'failed' if reasons else 'passed', 'failure_reasons': reasons,
-               'policy': 'strict_numerical' if method == 'fp32' or smoke else 'exact_validation_predictions',
+               'policy': 'strict_numerical' if method == 'fp32' or smoke else policy,
+               'equivalent_predictions': valid and all(r['argmax_agreement'] for r in validation) and bool(validation),
+               'warnings': ['Runtime predictions differ; export is executable, not numerically equivalent.']
+                           if any(not r['argmax_agreement'] for r in validation) else [],
                'numerical_mismatch_samples': numerical_mismatches, 'samples': len(rows),
                'validation_samples': len(validation),
                'max_abs_error': max((r['max_abs_error'] for r in rows if 'max_abs_error' in r), default=None),
                'argmax_agreement': sum(r['argmax_agreement'] for r in rows) / len(rows),
                'validation_argmax_agreement': (sum(r['argmax_agreement'] for r in validation) / len(validation)) if validation else None,
                'atol': .001 if method == 'fp32' else .15, 'rtol': .001,
-               'notes': 'INT8 raw-logit closeness is diagnostic; all validation predictions must match exactly. Synthetic input is a structural probe, not a quality dataset. Test is untouched.'}
+               'notes': 'Runtime validation checks shape/finite outputs over full validation, not quality acceptance or numerical equivalence. Exact policy additionally requires matching predictions. Test is untouched.'}
     if validation and all(r['valid_output'] for r in validation):
         targets = [r['target'] for r in validation]
         labels = list(range(num_classes))

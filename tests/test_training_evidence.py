@@ -163,8 +163,26 @@ class QatPersistenceTests(unittest.TestCase):
                 patch.object(qat, 'environment', return_value={'test': True}), \
                 patch.object(qat, 'split_fingerprint', return_value='frozen'):
             (Path(temp) / 'checkpoints/mobilenet_v2').mkdir(parents=True)
-            qat.train_qat(cfg, 'mobilenet_v2')
+            original_run_epoch = qat.run_epoch
+            calls = [0]
+            def interrupted_epoch(*args, **kwargs):
+                calls[0] += 1
+                if calls[0] == 3:
+                    raise KeyboardInterrupt()
+                return original_run_epoch(*args, **kwargs)
+            with patch.object(qat, 'run_epoch', side_effect=interrupted_epoch):
+                with self.assertRaises(KeyboardInterrupt):
+                    qat.train_qat(cfg, 'mobilenet_v2')
+            partial = torch.load(Path(temp) / 'checkpoints/mobilenet_v2/qat_last.pth', weights_only=True)
+            self.assertEqual(partial['epoch'], 1)
+            with self.assertRaisesRegex(ValueError, 'configuration changed'):
+                changed = copy.deepcopy(cfg)
+                changed['qat']['batch_size'] = 2
+                qat.train_qat(changed, 'mobilenet_v2', resume=True)
+            qat.train_qat(cfg, 'mobilenet_v2', resume=True)
             out = Path(temp) / 'results/training/mobilenet_v2/qat'
+            self.assertEqual([r['epoch'] for r in json.loads((out / 'epochs.json').read_text())], [1, 2])
+            self.assertTrue((out / 'resume_from_epoch_1.json').exists())
             rows = json.loads((out / 'epochs.json').read_text())
             self.assertEqual([r['observer_frozen'] for r in rows], [False, True])
             self.assertTrue(all(r['batchnorm_frozen'] for r in rows))
