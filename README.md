@@ -16,21 +16,24 @@ Audit tự động đã đọc được đủ 4.752 ảnh, không có ảnh hỏ
 
 ## 1. Chuẩn bị Kaggle
 
-Tạo một Kaggle Dataset riêng chứa đúng file:
+Thêm Dataset `watse_set` vào notebook bằng **Add Input**. Cấu trúc đang dùng:
 
 ```text
-realwaste.zip
+/kaggle/input/watse_set/realwaste-main/RealWaste/
+  Cardboard/
+  Food Organics/
+  Glass/
+  Metal/
+  Miscellaneous Trash/
+  Paper/
+  Plastic/
+  Textile Trash/
+  Vegetation/
 ```
 
-Đặt slug/directory của Kaggle Dataset là `realwaste`, để file xuất hiện tại:
+`configs/kaggle.yaml` đã đặt `data.archive: null` và `data.root` trỏ thẳng tới `RealWaste`. Không cần nén hoặc chép ảnh sang `/kaggle/working`. Nếu slug thực tế khác `watse_set`, sửa `data.root` cho đúng thư mục chứa 9 lớp.
 
-```text
-/kaggle/input/realwaste/realwaste.zip
-```
-
-Nếu Kaggle tạo đường dẫn khác, sửa duy nhất trường `data.archive` trong `configs/kaggle.yaml`.
-
-Nén toàn bộ thư mục dự án `waste-edge-quantization` thành ZIP và upload nó thành một Kaggle Dataset thứ hai, hoặc đưa mã nguồn lên GitHub. Không cần đưa thư mục `.venv`, `data/raw`, `results/smoke` vào ZIP.
+Source trên GitHub đã hỗ trợ cấu trúc thư mục này. Có thể clone theo mục 2, hoặc nén source thành ZIP và upload thành Kaggle Dataset thứ hai. Không đưa `.git`, `.venv`, `data/raw`, checkpoint hoặc kết quả cũ vào ZIP. Giữ các file audit và `data/splits`.
 
 Tạo Kaggle Notebook, chọn:
 
@@ -59,11 +62,11 @@ Sau đó giải nén, ví dụ:
 %cd /kaggle/working/waste-edge-quantization
 ```
 
-Nếu dùng GitHub:
+Nếu dùng GitHub, chạy:
 
 ```bash
 %cd /kaggle/working
-!git clone <URL_REPOSITORY_CUA_BAN> waste-edge-quantization
+!git clone https://github.com/xmongng/deeplearning.git waste-edge-quantization
 %cd /kaggle/working/waste-edge-quantization
 ```
 
@@ -84,9 +87,91 @@ Sau khi restart, `%cd` lại thư mục dự án và kiểm tra:
 
 Không tiếp tục nếu `CUDA: False`.
 
-## 4. Chạy toàn bộ pipeline
+## 4. Kiểm tra dữ liệu trước khi train
 
-Lệnh duy nhất:
+Chạy cell Python để kiểm tra đường dẫn và tên lớp:
+
+```python
+from pathlib import Path
+import yaml
+
+cfg = yaml.safe_load(Path("configs/kaggle.yaml").read_text())
+root = Path(cfg["data"]["root"])
+print("Dataset:", root)
+assert root.is_dir(), "Sai data.root: kiểm tra đường dẫn trong panel Input"
+for name in cfg["classes"]:
+    assert (root / name).is_dir(), f"Thiếu thư mục lớp: {name}"
+    print(name, len([p for p in (root / name).rglob("*")
+                     if p.is_file() and p.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp", ".webp"}]))
+```
+
+Sau đó đối chiếu tên file và SHA-256 với audit đã khóa:
+
+```bash
+!python -m src.verify_data --config configs/kaggle.yaml
+```
+
+Chỉ tiếp tục khi thấy `Verified 4752 RealWaste images`. Nếu có `missing`, `extra` hoặc `changed`, dataset chưa khớp bản đã audit; kiểm tra đúng phiên bản dữ liệu trước khi train. File phụ như README không được tính là ảnh. Không chạy lại `audit_data` hoặc `prepare_data` trên giao thức đã khóa.
+
+## 5. Chạy từng bước
+
+Chạy lần lượt từng cell dưới đây cho MobileNetV2. Đợi mỗi lệnh thành công trước khi chuyển bước tiếp theo.
+
+**5.1. Train FP32 trên GPU:**
+
+```bash
+!python -u -m src.train_fp32 --config configs/kaggle.yaml --model mobilenet_v2 --device cuda
+```
+
+**5.2. Export FP32 sang ExecuTorch:**
+
+```bash
+!python -u -m src.export_edge --config configs/kaggle.yaml --model mobilenet_v2
+```
+
+**5.3. PTQ INT8 và export:**
+
+```bash
+!python -u -m src.ptq_int8 --config configs/kaggle.yaml --model mobilenet_v2
+```
+
+**5.4. Train QAT trên GPU và export INT8:**
+
+```bash
+!python -u -m src.qat_int8 --config configs/kaggle.yaml --model mobilenet_v2 --device cuda
+```
+
+Lặp lại cả bốn bước cho `mobilenet_v3_large`, rồi `shufflenet_v2_x1_0`, bằng cách thay giá trị `--model`. Tổng cộng cần 3 model × 3 phương pháp = 9 file `.pte`.
+
+**5.5. Đánh giá cả 9 artifact:**
+
+```bash
+!python -u -m src.evaluate --config configs/kaggle.yaml
+```
+
+**5.6. Đóng gói kết quả của cách chạy từng bước:**
+
+```python
+from pathlib import Path
+import shutil
+
+project = Path("/kaggle/working/waste-edge-quantization")
+package = Path("/kaggle/working/waste-edge-step-output")
+assert not package.exists(), "Dùng tên output mới để tránh trộn kết quả"
+package.mkdir()
+for name in ("checkpoints", "exported", "results", "data", "configs"):
+    shutil.copytree(project / name, package / name,
+                    ignore=shutil.ignore_patterns("raw"))
+shutil.copy2(project / "README.md", package / "README.md")
+shutil.make_archive("/kaggle/working/waste-edge-complete", "zip", package)
+print("Created /kaggle/working/waste-edge-complete.zip")
+```
+
+## 6. Tùy chọn chạy tự động toàn bộ pipeline
+
+Dùng tùy chọn này trên một project chưa có checkpoint/artifact. Nếu đã chạy mục 5, không chạy lại lệnh này.
+
+Lệnh tự động:
 
 ```bash
 !python -u -m src.run_kaggle --config configs/kaggle.yaml 2>&1 | tee /kaggle/working/kaggle-training.log
@@ -94,7 +179,7 @@ Lệnh duy nhất:
 
 Pipeline lần lượt:
 
-1. Giải nén và đối chiếu SHA-256 của đủ 4.752 ảnh với audit đã khóa.
+1. Đọc trực tiếp thư mục dữ liệu và đối chiếu SHA-256 của đủ 4.752 ảnh với audit đã khóa.
 2. Fine-tune 3 baseline FP32 trên CUDA.
 3. Export 3 FP32 sang ExecuTorch/XNNPACK.
 4. PTQ W8A8 bằng 200 ảnh calibration train và export 3 model.
@@ -104,7 +189,7 @@ Pipeline lần lượt:
 
 Không chạy đồng thời hai model trong cùng GPU. Script chạy tuần tự để giảm nguy cơ hết VRAM và ghi log liên tục.
 
-## 5. Chạy từng bước khi cần khôi phục
+## 7. Khôi phục khi phiên bị ngắt
 
 Nếu phiên Kaggle dừng giữa chừng, tải checkpoint đã có lên lại `/kaggle/working/waste-edge-quantization/checkpoints` rồi chạy riêng model còn thiếu. Ví dụ MobileNetV2:
 
@@ -132,9 +217,9 @@ Sau khi đủ 9 file `.pte`:
 !python -u -m src.evaluate --config configs/kaggle.yaml
 ```
 
-## 6. Tải kết quả khỏi Kaggle
+## 8. Tải kết quả khỏi Kaggle
 
-Trong panel Output, tải:
+Trong panel Output, tải file ZIP. File log bên dưới chỉ có khi dùng pipeline tự động:
 
 ```text
 /kaggle/working/waste-edge-complete.zip
@@ -143,7 +228,7 @@ Trong panel Output, tải:
 
 File ZIP gồm checkpoint, 9 model `.pte`, metadata operator/delegation, metric chất lượng, audit, split và config. Với một run dài, nên bấm **Save Version** sau mỗi kiến trúc để Kaggle lưu output.
 
-## 7. Benchmark đúng trên MacBook Air M3
+## 9. Benchmark đúng trên MacBook Air M3
 
 Không dùng latency Kaggle để trả lời hiệu suất trên M3. Sau khi tải ZIP về, chép các thư mục `checkpoints`, `exported`, `results`, `data`, `configs` vào đúng project này. Kích hoạt môi trường local và chạy:
 
@@ -163,7 +248,7 @@ docs/REPORT.md
 figures/
 ```
 
-## 8. Điều chỉnh khi GPU thiếu bộ nhớ
+## 10. Điều chỉnh khi GPU thiếu bộ nhớ
 
 Chỉ giảm `train.batch_size` từ 64 xuống 32 hoặc 16 và `qat.batch_size` từ 32 xuống 16 trong `configs/kaggle.yaml`. Không đổi preprocessing, classes, seed hoặc manifests giữa các mô hình. Batch size thay đổi phải được ghi trong báo cáo.
 

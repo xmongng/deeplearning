@@ -2,8 +2,8 @@ seed: 42
 classes: [Cardboard, Food Organics, Glass, Metal, Miscellaneous Trash, Paper, Plastic, Textile Trash, Vegetation]
 models: [mobilenet_v2, mobilenet_v3_large, shufflenet_v2_x1_0]
 data:
-  archive: /kaggle/input/realwaste/realwaste.zip
-  root: data/raw
+  archive: null  # Dataset is already extracted; no ZIP is required.
+  root: /kaggle/input/watse_set/realwaste-main/RealWaste
   ratios: [0.8, 0.1, 0.1]
   phash_distance: 4
   calibration_images: 200
