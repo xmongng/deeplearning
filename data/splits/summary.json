@@ -1,0 +1,59 @@
+{
+  "fingerprint": "97792fa5ffcef4ea5d431143779e22db94e6ba013b51c873833da17c1af157b8",
+  "seed": 42,
+  "counts": {
+    "train": {
+      "Cardboard": 369,
+      "Food Organics": 329,
+      "Glass": 336,
+      "Metal": 632,
+      "Miscellaneous Trash": 396,
+      "Paper": 400,
+      "Plastic": 737,
+      "Textile Trash": 254,
+      "Vegetation": 349
+    },
+    "val": {
+      "Cardboard": 46,
+      "Food Organics": 41,
+      "Glass": 42,
+      "Metal": 79,
+      "Miscellaneous Trash": 50,
+      "Paper": 50,
+      "Plastic": 92,
+      "Textile Trash": 32,
+      "Vegetation": 44
+    },
+    "test": {
+      "Cardboard": 46,
+      "Food Organics": 41,
+      "Glass": 42,
+      "Metal": 79,
+      "Miscellaneous Trash": 49,
+      "Paper": 50,
+      "Plastic": 92,
+      "Textile Trash": 32,
+      "Vegetation": 43
+    },
+    "calibration": {
+      "Cardboard": 23,
+      "Food Organics": 23,
+      "Glass": 22,
+      "Metal": 22,
+      "Miscellaneous Trash": 22,
+      "Paper": 22,
+      "Plastic": 22,
+      "Textile Trash": 22,
+      "Vegetation": 22
+    }
+  },
+  "manual_review_complete": false,
+  "conservative_groups_accepted": true,
+  "audit_sha256": "b4251a34024906c2e1d0066cee77846b4451799ed2af2e90508141375f80be73",
+  "cross_label_phash_groups": [
+    "g00037",
+    "g00518",
+    "g01323",
+    "g02001"
+  ]
+}

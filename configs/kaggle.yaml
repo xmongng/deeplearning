@@ -1,0 +1,35 @@
+seed: 42
+classes: [Cardboard, Food Organics, Glass, Metal, Miscellaneous Trash, Paper, Plastic, Textile Trash, Vegetation]
+models: [mobilenet_v2, mobilenet_v3_large, shufflenet_v2_x1_0]
+data:
+  archive: /kaggle/input/realwaste/realwaste.zip
+  root: data/raw
+  ratios: [0.8, 0.1, 0.1]
+  phash_distance: 4
+  calibration_images: 200
+preprocessing:
+  resize: 256
+  crop: 224
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+train:
+  epochs: 20
+  batch_size: 64
+  learning_rate: 0.0003
+  weight_decay: 0.0001
+  patience: 5
+  class_weights: true
+  workers: 2
+  device: cuda
+qat:
+  epochs: 8
+  batch_size: 32
+  learning_rate: 0.00001
+  freeze_observer_epoch: 4
+  freeze_bn_epoch: 3
+  device: cuda
+benchmark:
+  threads: [1, 4]
+  warmup: 30
+  iterations: 200
+  repeats: 3

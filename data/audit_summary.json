@@ -1,0 +1,38 @@
+{
+  "archive_sha256": "1ede08b32358ee62065bcc1c8cb47a2ece04e8dff5b1fb53342bb8750895b2f3",
+  "images": 4752,
+  "usable": 4752,
+  "excluded": 0,
+  "candidate_pairs": 14,
+  "groups": 4739,
+  "conflicting_groups": [
+    "g00037",
+    "g00518",
+    "g01323",
+    "g02001"
+  ],
+  "phash_distance": 4,
+  "manual_label_review_complete": false,
+  "before": {
+    "Cardboard": 461,
+    "Food Organics": 411,
+    "Glass": 420,
+    "Metal": 790,
+    "Miscellaneous Trash": 495,
+    "Paper": 500,
+    "Plastic": 921,
+    "Textile Trash": 318,
+    "Vegetation": 436
+  },
+  "after": {
+    "Cardboard": 461,
+    "Food Organics": 411,
+    "Glass": 420,
+    "Metal": 790,
+    "Miscellaneous Trash": 495,
+    "Paper": 500,
+    "Plastic": 921,
+    "Textile Trash": 318,
+    "Vegetation": 436
+  }
+}

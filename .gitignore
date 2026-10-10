@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+data/raw/
+checkpoints/**/*.pth
+exported/**/*.pte
+exported/**/*.pt2
+results/smoke/
+kaggle-output/
+.cache/
+.DS_Store
+environment.json
+environment-kaggle.json
+results/cp0_feasibility.json
+results/cp0/

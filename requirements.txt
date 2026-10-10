@@ -1,0 +1,12 @@
+# Bootstrap only. Prefer requirements-lock.txt after the verified CP0 installation.
+executorch
+torchao
+torchvision
+pillow
+ImageHash
+scikit-learn
+pandas
+matplotlib
+PyYAML
+psutil
+pytest

@@ -1,0 +1,15 @@
+path_a,path_b,distance,exact,cross_label
+Cardboard/Cardboard_132.jpg,Metal/Metal_559.jpg,4,False,True
+Food Organics/Food Organics_150.jpg,Metal/Metal_326.jpg,4,False,True
+Food Organics/Food Organics_199.jpg,Food Organics/Food Organics_73.jpg,4,False,False
+Food Organics/Food Organics_81.jpg,Food Organics/Food Organics_82.jpg,4,False,False
+Metal/Metal_127.jpg,Textile Trash/Textile Trash_219.jpg,4,False,True
+Metal/Metal_655.jpg,Metal/Metal_658.jpg,2,False,False
+Metal/Metal_738.jpg,Plastic/Plastic_204.jpg,4,False,True
+Metal/Metal_738.jpg,Plastic/Plastic_763.jpg,4,False,True
+Miscellaneous Trash/Miscellaneous Trash_401.jpg,Miscellaneous Trash/Miscellaneous Trash_70.jpg,4,False,False
+Plastic/Plastic_199.jpg,Plastic/Plastic_774.jpg,4,False,False
+Plastic/Plastic_204.jpg,Plastic/Plastic_763.jpg,2,False,False
+Plastic/Plastic_216.jpg,Plastic/Plastic_218.jpg,2,False,False
+Plastic/Plastic_218.jpg,Plastic/Plastic_230.jpg,4,False,False
+Plastic/Plastic_688.jpg,Plastic/Plastic_733.jpg,4,False,False
