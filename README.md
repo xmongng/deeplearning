@@ -220,6 +220,47 @@ Sau khi đủ 9 file `.pte`:
 !python -u -m src.stage_runner evaluate --config configs/kaggle.yaml
 ```
 
+## Kiểm tra parity khi export và xử lý lỗi PTQ cũ
+
+Với FP32, giữ kiểm tra từng logit với `rtol=0.001`, `atol=0.001`. Smoke test cũng kiểm tra số học nghiêm ngặt.
+
+Với PTQ/QAT INT8, mức `rtol=0.001`, `atol=0.15` được giữ để ghi nhận sai lệch số học, nhưng không còn dừng ngay khi một logit vượt mức này. Trước khi chấp nhận artifact, code so sánh **toàn bộ validation** giữa model đã convert trước export và `.pte` chạy XNNPACK. Mặc định **mọi dự đoán top-1 validation phải trùng nhau**, và output phải đúng shape, hữu hạn. Độ lệch Accuracy/Macro-F1 cùng mọi logit được ghi lại. Test chưa được dùng ở bước này.
+
+Vì vậy sai lệch `0.159983 > 0.15` có thể được chấp nhận khi tất cả dự đoán validation vẫn trùng; nếu có dự đoán validation khác nhau, export vẫn thất bại và cần phân tích bằng chứng. Điều này không khẳng định một artifact cụ thể đã đạt khi chưa chạy kiểm tra thật.
+
+Mỗi lần thử lưu vào:
+
+```text
+results/export_validation/<model>/<method>/<thời điểm UTC>/
+  export_report.json       passed/failed, exception, cấu hình, operator/delegate và hash
+  parity_samples.json     từng ảnh: logits trước/sau export, sai lệch, nhãn/dự đoán
+  parity_summary.json     tổng hợp mức sai lệch, agreement, Accuracy/Macro-F1 validation
+  <method>.pte            candidate giữ lại để chẩn đoán
+  <method>.pt2
+  <method>_edge_graph.txt
+  legacy_incomplete/      artifact dở từ code cũ, nếu có
+```
+
+Chỉ candidate đạt kiểm tra mới được đưa vào `exported/<model>/`; metadata `.json` được ghi cuối cùng để đánh dấu hoàn tất. Nếu thất bại, artifact dở không chiếm tên kết quả chính, nên có thể chạy lại sau khi xử lý nguyên nhân.
+
+Nếu code cũ đã để lại `exported/mobilenet_v2/ptq.pte` nhưng chưa có `ptq.json`, code mới tự chuyển bộ file dở vào `legacy_incomplete/` để bảo toàn bằng chứng rồi thử export lại. Artifact đã có đủ `.pte` và `.json` vẫn được bảo vệ khỏi ghi đè.
+
+Cập nhật source rồi chạy lại PTQ mà không train FP32 lại:
+
+```bash
+%cd /kaggle/working/waste-edge-quantization
+!git pull --ff-only origin main
+!python -u -m src.stage_runner ptq_int8 --config configs/kaggle.yaml --model mobilenet_v2
+```
+
+Nếu lỗi ở QAT export nhưng training đã hoàn tất và có `qat_summary.json`:
+
+```bash
+!python -u -m src.stage_runner qat_int8 --config configs/kaggle.yaml --model mobilenet_v2 --export-only
+```
+
+Giữ nguyên các cảnh báo thư viện để phục vụ chẩn đoán. Không coi một warning là nguyên nhân làm chương trình dừng nếu traceback chỉ ra exception khác.
+
 ## 8. Tải kết quả khỏi Kaggle
 
 Trong panel Output, tải file ZIP. File log bên dưới chỉ có khi dùng pipeline tự động:
@@ -257,6 +298,8 @@ results/
     val_predictions.csv
     {train,val}_per_class.json   precision/recall/F1/support từng lớp
     {train,val}_confusion.*      ma trận JSON và hình PNG/PDF
+  export_validation/<model>/<method>/<thời điểm UTC>/
+    export_report.json, parity_samples.json, parity_summary.json
   quantization/<model>/ptq/
     run_config.json              nguồn checkpoint và cấu hình calibration
     calibration.csv             tên/nhãn ảnh calibration, thời gian từng batch
@@ -352,6 +395,7 @@ tests/                   kiểm tra leakage, preprocessing, runtime
 python -m pytest -q
 # Hoặc chỉ kiểm tra ghi log/lịch sử với unittest:
 python -m unittest discover -s tests -p test_training_evidence.py -v
+python -m unittest discover -s tests -p test_export_validation.py -v
 ```
 
 Bộ test đầy đủ cần dữ liệu local tại `data/raw` cho kiểm tra preprocessing; các kiểm tra smoke được bỏ qua nếu chưa có artifact CP0. Chỉ kiểm tra phần xác minh và giao thức dữ liệu bằng `python -m pytest -q tests/test_verify_data.py tests/test_data_protocol.py`.

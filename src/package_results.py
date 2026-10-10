@@ -31,6 +31,8 @@ def package_results(output=None):
     for row in quality:
         path = ROOT / 'exported' / row['model'] / (row['method'] + '.pte')
         metadata = json.loads(path.with_suffix('.json').read_text())
+        if metadata.get("export_status", "passed") != "passed" or metadata.get("parity_status", "passed") != "passed":
+            raise ValueError(f"Artifact did not pass export validation: {path}")
         if metadata.get('smoke_only') or digest(path) != row['pte_sha256'] or metadata['pte_sha256'] != row['pte_sha256']:
             raise ValueError(f'Quality metrics/artifact mismatch: {path}')
     with tempfile.TemporaryDirectory(prefix='waste-edge-package-', dir=ROOT.parent) as temp:

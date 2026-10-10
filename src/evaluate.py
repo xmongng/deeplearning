@@ -16,6 +16,8 @@ from .confusion_plot import plot_confusion
 def verify_artifact(cfg, name, method):
     path = artifact_dir(name) / f"{method}.pte"
     meta = json.loads(path.with_suffix(".json").read_text())
+    if meta.get("export_status", "passed") != "passed" or meta.get("parity_status", "passed") != "passed":
+        raise ValueError("Artifact did not pass export validation")
     if meta["smoke_only"] or meta["classes"] != cfg["classes"] or meta["preprocessing"] != cfg["preprocessing"]:
         raise ValueError("Artifact/config mismatch or smoke artifact")
     if meta["split_fingerprint"] != split_fingerprint() or meta["pte_sha256"] != sha256(path):
